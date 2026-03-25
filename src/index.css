@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --color-neon-cyan: #00f3ff;
+  --color-neon-pink: #ff00ff;
+  --color-neon-lime: #39ff14;
+}
+
+@layer base {
+  body {
+    @apply bg-[#050505] text-white antialiased;
+    font-family: var(--font-sans);
+  }
+}
+
+.neon-glow-cyan {
+  box-shadow: 0 0 10px rgba(0, 243, 255, 0.3), 0 0 20px rgba(0, 243, 255, 0.1);
+}
+
+.neon-glow-pink {
+  box-shadow: 0 0 10px rgba(255, 0, 255, 0.3), 0 0 20px rgba(255, 0, 255, 0.1);
+}
+
+.neon-text-cyan {
+  text-shadow: 0 0 5px rgba(0, 243, 255, 0.5);
+}
+
+.neon-text-pink {
+  text-shadow: 0 0 5px rgba(255, 0, 255, 0.5);
+}
+
+@keyframes scanline {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100%); }
+}
+
+.scanline {
+  width: 100%;
+  height: 2px;
+  background: rgba(0, 243, 255, 0.1);
+  position: absolute;
+  top: 0;
+  left: 0;
+  animation: scanline 8s linear infinite;
+  pointer-events: none;
+}
