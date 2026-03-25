@@ -109,32 +109,69 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
           const username = usernameMatch ? usernameMatch[1] : null;
           
           if (username) {
+            // Add a small random delay to mimic human behavior
+            await new Promise(resolve => setTimeout(resolve, 500 + Math.random() * 1000));
+            
+            const ua = userAgents[Math.floor(Math.random() * userAgents.length)];
             // First get user info to get user ID
             const userInfoUrl = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${username}`;
-            const userInfoResponse = await axios.get(userInfoUrl, {
-              headers: {
-                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-                "X-IG-App-ID": "936619743392459",
-                "X-Requested-With": "XMLHttpRequest",
-                "Referer": url,
-              },
-              timeout: 5000,
-            });
-            
-            const userId = userInfoResponse.data?.data?.user?.id;
-            if (userId) {
-              const storyApiUrl = `https://www.instagram.com/api/v1/feed/reels_media/?reel_ids=${userId}`;
-              const storyResponse = await axios.get(storyApiUrl, {
+            let userInfoResponse;
+            try {
+              userInfoResponse = await axios.get(userInfoUrl, {
                 headers: {
-                  "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+                  "User-Agent": ua,
                   "X-IG-App-ID": "936619743392459",
+                  "X-ASBD-ID": "129477",
+                  "X-IG-WWW-Claim": "0",
                   "X-Requested-With": "XMLHttpRequest",
-                  "Referer": url,
+                  "Referer": `https://www.instagram.com/${username}/`,
                 },
                 timeout: 5000,
               });
+            } catch (e: any) {
+              console.error(`Story User Info Error for ${username}:`, e.message);
+            }
+            
+            const user = userInfoResponse?.data?.data?.user;
+            const userId = user?.id;
+            const isPrivate = user?.is_private;
+
+            if (isPrivate) {
+              return res.status(403).json({ error: "This account is PRIVATE. We cannot download stories from private accounts." });
+            }
+            
+            // Fallback: Try to get userId from HTML if API fails
+            if (!userId) {
+              try {
+                const profileHtml = await axios.get(`https://www.instagram.com/${username}/`, {
+                  headers: { "User-Agent": userAgents[0] }
+                });
+                const idMatch = profileHtml.data.match(/"user_id":"(\d+)"/) || profileHtml.data.match(/"id":"(\d+)"/);
+                if (idMatch) userId = idMatch[1];
+              } catch (e) {}
+            }
+
+            if (userId) {
+              const ua = userAgents[Math.floor(Math.random() * userAgents.length)];
+              const storyApiUrl = `https://www.instagram.com/api/v1/feed/reels_media/?reel_ids=${userId}`;
+              let storyResponse;
+              try {
+                storyResponse = await axios.get(storyApiUrl, {
+                  headers: {
+                    "User-Agent": ua,
+                    "X-IG-App-ID": "936619743392459",
+                    "X-ASBD-ID": "129477",
+                    "X-IG-WWW-Claim": "0",
+                    "X-Requested-With": "XMLHttpRequest",
+                    "Referer": `https://www.instagram.com/stories/${username}/`,
+                  },
+                  timeout: 5000,
+                });
+              } catch (e: any) {
+                console.error(`Story Reels Media Error for ${username}:`, e.message);
+              }
               
-              const reels = storyResponse.data?.reels;
+              const reels = storyResponse?.data?.reels;
               if (reels && reels[userId]) {
                 const items = reels[userId].items;
                 const results: any[] = [];
@@ -180,6 +217,10 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
             "X-IG-App-ID": "936619743392459",
+            "X-ASBD-ID": "129477",
+            "X-IG-WWW-Claim": "0",
+            "X-IG-Capabilities": "3brvPw==",
+            "X-IG-Connection-Type": "WIFI",
             "X-Requested-With": "XMLHttpRequest",
             "Cache-Control": "no-cache",
             "Pragma": "no-cache",
@@ -187,7 +228,7 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
             "Sec-Fetch-Mode": "navigate",
             "Sec-Fetch-Site": "none",
             "Upgrade-Insecure-Requests": "1",
-            "Referer": "https://www.google.com/",
+            "Referer": "https://www.instagram.com/",
           },
           maxRedirects: 5,
           timeout: 10000,
@@ -199,7 +240,9 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
         "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
         "Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1"
       ];
 
       let response;
@@ -465,21 +508,28 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
         const storyPatterns = [
           /"xdt_api__v1__media__direct_path":"([^"]+)"/,
           /"video_versions":\s*\[\s*\{\s*"url":"([^"]+)"/,
-          /"image_versions2":\s*\{\s*"candidates":\s*\[\s*\{\s*"url":"([^"]+)"/
+          /"image_versions2":\s*\{\s*"candidates":\s*\[\s*\{\s*"url":"([^"]+)"/,
+          /"video_url":"([^"]+)"/,
+          /"display_url":"([^"]+)"/
         ];
 
         for (const pattern of storyPatterns) {
-          const match = html.match(pattern);
-          if (match) {
-            const url = match[1] || match[2] || match[3];
-            const decoded = url.replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
-            if (!results.some(r => r.mediaUrl === decoded)) {
-              results.push({
-                mediaUrl: decoded,
-                thumbnail: decoded,
-                type: decoded.includes(".mp4") || decoded.includes("video") ? "video" : "image"
-              });
-            }
+          const matches = html.match(new RegExp(pattern, 'g'));
+          if (matches) {
+            matches.forEach(m => {
+              const urlMatch = m.match(pattern);
+              if (urlMatch) {
+                const url = urlMatch[1];
+                const decoded = url.replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
+                if (!results.some(r => r.mediaUrl === decoded)) {
+                  results.push({
+                    mediaUrl: decoded,
+                    thumbnail: decoded,
+                    type: decoded.includes(".mp4") || decoded.includes("video") || decoded.includes("fbcdn") ? "video" : "image"
+                  });
+                }
+              }
+            });
           }
         }
         
