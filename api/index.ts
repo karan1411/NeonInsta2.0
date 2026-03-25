@@ -34,15 +34,153 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
     }
 
     const isStory = url.includes("/stories/");
+    const shortcodeMatch = url.match(/\/(?:p|reels|reel)\/([A-Za-z0-9_-]+)/);
+    const shortcode = shortcodeMatch ? shortcodeMatch[1] : null;
 
     try {
-      // Strategy 1: Standard Mobile Request
+      // Strategy 0: Direct JSON API (Fastest and most reliable if not blocked)
+      if (shortcode && !isStory) {
+        try {
+          const jsonUrl = `${url}?__a=1&__d=dis`;
+          const jsonResponse = await axios.get(jsonUrl, {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+              "X-IG-App-ID": "936619743392459",
+              "X-Requested-With": "XMLHttpRequest",
+              "Referer": url,
+            },
+            timeout: 5000,
+          });
+          
+          const media = jsonResponse.data?.graphql?.shortcode_media || jsonResponse.data?.items?.[0];
+          if (media) {
+            const results: any[] = [];
+            const title = media.edge_media_to_caption?.edges?.[0]?.node?.text || media.caption?.text || "Instagram Media";
+
+            // Handle carousel
+            const carouselItems = media.edge_sidecar_to_children?.edges || media.carousel_media;
+            if (carouselItems) {
+              carouselItems.forEach((item: any) => {
+                const node = item.node || item;
+                const isVideo = node.is_video || !!node.video_versions;
+                const vUrl = node.video_url || node.video_versions?.[0]?.url;
+                const dUrl = node.display_url || node.image_versions2?.candidates?.[0]?.url;
+                
+                if (vUrl || dUrl) {
+                  results.push({
+                    mediaUrl: (isVideo && vUrl) ? vUrl : dUrl,
+                    thumbnail: dUrl || vUrl,
+                    type: isVideo ? "video" : "image",
+                  });
+                }
+              });
+            } else {
+              const isVideo = media.is_video || !!media.video_versions;
+              const vUrl = media.video_url || media.video_versions?.[0]?.url;
+              const dUrl = media.display_url || media.image_versions2?.candidates?.[0]?.url;
+              
+              if (vUrl || dUrl) {
+                results.push({
+                  mediaUrl: (isVideo && vUrl) ? vUrl : dUrl,
+                  thumbnail: dUrl || vUrl,
+                  type: isVideo ? "video" : "image",
+                });
+              }
+            }
+            
+            if (results.length > 0) {
+              return res.json({
+                success: true,
+                results,
+                title,
+                isReel: url.includes("/reel/") || url.includes("/reels/"),
+                isStory
+              });
+            }
+          }
+        } catch (e) {}
+      }
+
+      // Strategy 0.5: Story API (if it's a story)
+      if (isStory) {
+        try {
+          // Extract username from story URL
+          const usernameMatch = url.match(/\/stories\/([^\/]+)/);
+          const username = usernameMatch ? usernameMatch[1] : null;
+          
+          if (username) {
+            // First get user info to get user ID
+            const userInfoUrl = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${username}`;
+            const userInfoResponse = await axios.get(userInfoUrl, {
+              headers: {
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+                "X-IG-App-ID": "936619743392459",
+                "X-Requested-With": "XMLHttpRequest",
+                "Referer": url,
+              },
+              timeout: 5000,
+            });
+            
+            const userId = userInfoResponse.data?.data?.user?.id;
+            if (userId) {
+              const storyApiUrl = `https://www.instagram.com/api/v1/feed/reels_media/?reel_ids=${userId}`;
+              const storyResponse = await axios.get(storyApiUrl, {
+                headers: {
+                  "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+                  "X-IG-App-ID": "936619743392459",
+                  "X-Requested-With": "XMLHttpRequest",
+                  "Referer": url,
+                },
+                timeout: 5000,
+              });
+              
+              const reels = storyResponse.data?.reels;
+              if (reels && reels[userId]) {
+                const items = reels[userId].items;
+                const results: any[] = [];
+                
+                // If the URL has a specific story ID, find that one
+                const storyIdMatch = url.match(/\/stories\/[^\/]+\/([0-9]+)/);
+                const targetStoryId = storyIdMatch ? storyIdMatch[1] : null;
+                
+                items.forEach((item: any) => {
+                  if (targetStoryId && !item.id.includes(targetStoryId)) return;
+                  
+                  const isVideo = !!item.video_versions;
+                  const vUrl = item.video_versions?.[0]?.url;
+                  const iUrl = item.image_versions2?.candidates?.[0]?.url;
+                  
+                  if (vUrl || iUrl) {
+                    results.push({
+                      mediaUrl: (isVideo && vUrl) ? vUrl : iUrl,
+                      thumbnail: iUrl || vUrl,
+                      type: isVideo ? "video" : "image",
+                    });
+                  }
+                });
+                
+                if (results.length > 0) {
+                  return res.json({
+                    success: true,
+                    results,
+                    title: `Instagram Story by ${username}`,
+                    isReel: false,
+                    isStory: true
+                  });
+                }
+              }
+            }
+          }
+        } catch (e) {}
+      }
       const fetchInstagram = async (userAgent: string) => {
         return await axios.get(url, {
           headers: {
             "User-Agent": userAgent,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
+            "X-IG-App-ID": "936619743392459",
+            "X-Requested-With": "XMLHttpRequest",
             "Cache-Control": "no-cache",
             "Pragma": "no-cache",
             "Sec-Fetch-Dest": "document",
@@ -82,9 +220,6 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
       }
 
       // Strategy 2: GraphQL Fallback (if no video found yet)
-      const shortcodeMatch = url.match(/\/(?:p|reels|reel)\/([A-Za-z0-9_-]+)/);
-      const shortcode = shortcodeMatch ? shortcodeMatch[1] : null;
-
       if (shortcode && (!html || !html.includes(".mp4"))) {
         try {
           const gqlUrl = `https://www.instagram.com/graphql/query/?query_hash=b7d3d6544695990391a4f148fdd9c063&variables=${encodeURIComponent(JSON.stringify({ shortcode }))}`;
@@ -148,53 +283,161 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
       // 2. Aggressive JSON Extraction for multiple items
       $("script").each((_, script) => {
         const content = $(script).html();
-        if (!content || !content.includes("display_url")) return;
+        if (!content) return;
 
         try {
-          // Look for edge_sidecar_to_children in JSON strings
-          if (content.includes("edge_sidecar_to_children")) {
-            const carouselMatch = content.match(/"edge_sidecar_to_children":\s*\{"edges":\s*\[(.*?)\]\}/);
-            if (carouselMatch) {
-              const edgesStr = carouselMatch[1];
-              const mediaMatches = edgesStr.match(/"node":\s*\{(.*?)\}/g);
-              if (mediaMatches) {
-                mediaMatches.forEach(m => {
-                  const isVideo = m.includes('"is_video":true');
-                  const videoMatch = m.match(/"video_url":"([^"]+)"/);
-                  const displayMatch = m.match(/"display_url":"([^"]+)"/);
-                  
-                  if (displayMatch) {
-                    const displayUrl = displayMatch[1].replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
-                    const videoUrl = videoMatch ? videoMatch[1].replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/") : null;
+          // Pattern 0: window.__additionalDataLoaded
+          if (content.includes("__additionalDataLoaded")) {
+            const dataMatch = content.match(/__additionalDataLoaded\s*\(\s*['"](.*?)['"]\s*,\s*(\{.*?\})\s*\)/);
+            if (dataMatch) {
+              const jsonData = JSON.parse(dataMatch[2]);
+              const items = jsonData.items || [jsonData.graphql?.shortcode_media];
+              
+              items.forEach((item: any) => {
+                if (!item) return;
+                
+                // Handle carousel
+                if (item.carousel_media) {
+                  item.carousel_media.forEach((m: any) => {
+                    const isVideo = !!m.video_versions;
+                    const vUrl = m.video_versions?.[0]?.url;
+                    const iUrl = m.image_versions2?.candidates?.[0]?.url;
                     
+                    if (vUrl || iUrl) {
+                      results.push({
+                        mediaUrl: (isVideo && vUrl) ? vUrl : iUrl,
+                        thumbnail: iUrl || vUrl,
+                        type: isVideo ? "video" : "image"
+                      });
+                    }
+                  });
+                } else {
+                  const isVideo = !!item.video_versions;
+                  const vUrl = item.video_versions?.[0]?.url;
+                  const iUrl = item.image_versions2?.candidates?.[0]?.url;
+                  
+                  if (vUrl || iUrl) {
                     results.push({
-                      mediaUrl: isVideo ? videoUrl : displayUrl,
+                      mediaUrl: (isVideo && vUrl) ? vUrl : iUrl,
+                      thumbnail: iUrl || vUrl,
+                      type: isVideo ? "video" : "image"
+                    });
+                  }
+                }
+              });
+            }
+          }
+
+          // Pattern 0.5: window._sharedData
+          if (content.includes("_sharedData")) {
+            const dataMatch = content.match(/window\._sharedData\s*=\s*(\{.*?\});/);
+            if (dataMatch) {
+              const jsonData = JSON.parse(dataMatch[1]);
+              const entryData = jsonData.entry_data;
+              if (entryData) {
+                const pageData = entryData.PostPage?.[0]?.graphql?.shortcode_media || entryData.StoriesPage?.[0]?.reel?.items?.[0];
+                if (pageData) {
+                  const isVideo = pageData.is_video;
+                  const vUrl = pageData.video_url;
+                  const dUrl = pageData.display_url;
+                  
+                  if (vUrl || dUrl) {
+                    results.push({
+                      mediaUrl: (isVideo && vUrl) ? vUrl : dUrl,
+                      thumbnail: dUrl || vUrl,
+                      type: isVideo ? "video" : "image"
+                    });
+                  }
+                }
+              }
+            }
+          }
+          const carouselMatches = content.match(/"edge_sidecar_to_children":\s*\{"edges":\s*\[(.*?)\]\}/g);
+          if (carouselMatches) {
+            carouselMatches.forEach(match => {
+              const edgesMatch = match.match(/"node":\s*\{(.*?)\}/g);
+              if (edgesMatch) {
+                edgesMatch.forEach(m => {
+                  const isVideo = m.includes('"is_video":true');
+                  const videoUrl = m.match(/"video_url":"([^"]+)"/)?.[1]?.replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
+                  const displayUrl = m.match(/"display_url":"([^"]+)"/)?.[1]?.replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
+                  
+                  if (displayUrl) {
+                    results.push({
+                      mediaUrl: isVideo && videoUrl ? videoUrl : displayUrl,
                       thumbnail: displayUrl,
                       type: isVideo ? "video" : "image"
                     });
                   }
                 });
               }
-            }
+            });
           }
-          
-          // Fallback: search for all video_url and display_url pairs
-          if (results.length === 0) {
-            const videoMatches = content.match(/"video_url":"([^"]+)"/g);
-            const displayMatches = content.match(/"display_url":"([^"]+)"/g);
-            
-            if (videoMatches) {
-              videoMatches.forEach((v, i) => {
-                const vUrl = v.match(/"video_url":"([^"]+)"/)?.[1].replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
-                if (vUrl && !results.some(r => r.mediaUrl === vUrl)) {
-                  results.push({
-                    mediaUrl: vUrl,
-                    thumbnail: vUrl, // Fallback thumbnail
-                    type: "video"
-                  });
+
+          // Pattern 2: xdt_api__v1__media (Newer Instagram API structure)
+          if (content.includes("xdt_api__v1__media")) {
+            const mediaMatches = content.match(/"video_versions":\s*\[(.*?)\]/g);
+            if (mediaMatches) {
+              mediaMatches.forEach(m => {
+                const urlMatch = m.match(/"url":"([^"]+)"/);
+                if (urlMatch) {
+                  const vUrl = urlMatch[1].replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
+                  if (!results.some(r => r.mediaUrl === vUrl)) {
+                    results.push({
+                      mediaUrl: vUrl,
+                      thumbnail: vUrl,
+                      type: "video"
+                    });
+                  }
                 }
               });
             }
+            
+            const imageMatches = content.match(/"image_versions2":\s*\{"candidates":\s*\[(.*?)\]\}/g);
+            if (imageMatches) {
+              imageMatches.forEach(m => {
+                const urlMatch = m.match(/"url":"([^"]+)"/);
+                if (urlMatch) {
+                  const iUrl = urlMatch[1].replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
+                  if (!results.some(r => r.mediaUrl === iUrl)) {
+                    results.push({
+                      mediaUrl: iUrl,
+                      thumbnail: iUrl,
+                      type: "image"
+                    });
+                  }
+                }
+              });
+            }
+          }
+
+          // Pattern 3: Generic video_url/display_url search
+          const videoUrlMatches = content.match(/"video_url":"([^"]+)"/g);
+          if (videoUrlMatches) {
+            videoUrlMatches.forEach(m => {
+              const vUrl = m.match(/"video_url":"([^"]+)"/)?.[1]?.replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
+              if (vUrl && !results.some(r => r.mediaUrl === vUrl)) {
+                results.push({
+                  mediaUrl: vUrl,
+                  thumbnail: vUrl,
+                  type: "video"
+                });
+              }
+            });
+          }
+          
+          const displayUrlMatches = content.match(/"display_url":"([^"]+)"/g);
+          if (displayUrlMatches) {
+            displayUrlMatches.forEach(m => {
+              const dUrl = m.match(/"display_url":"([^"]+)"/)?.[1]?.replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
+              if (dUrl && !results.some(r => r.mediaUrl === dUrl)) {
+                results.push({
+                  mediaUrl: dUrl,
+                  thumbnail: dUrl,
+                  type: "image"
+                });
+              }
+            });
           }
         } catch (e) {}
       });
@@ -218,14 +461,39 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
 
       // 4. Story specific extraction (often found in xdt_api__v1__media__direct_path or similar)
       if (isStory && results.length === 0) {
-        const directPathMatch = html.match(/"xdt_api__v1__media__direct_path":"([^"]+)"/);
-        if (directPathMatch) {
-          const url = directPathMatch[1].replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
-          results.push({
-            mediaUrl: url,
-            thumbnail: url,
-            type: url.includes(".mp4") ? "video" : "image"
-          });
+        // Try to find any direct video/image links in the whole HTML for stories
+        const storyPatterns = [
+          /"xdt_api__v1__media__direct_path":"([^"]+)"/,
+          /"video_versions":\s*\[\s*\{\s*"url":"([^"]+)"/,
+          /"image_versions2":\s*\{\s*"candidates":\s*\[\s*\{\s*"url":"([^"]+)"/
+        ];
+
+        for (const pattern of storyPatterns) {
+          const match = html.match(pattern);
+          if (match) {
+            const url = match[1] || match[2] || match[3];
+            const decoded = url.replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
+            if (!results.some(r => r.mediaUrl === decoded)) {
+              results.push({
+                mediaUrl: decoded,
+                thumbnail: decoded,
+                type: decoded.includes(".mp4") || decoded.includes("video") ? "video" : "image"
+              });
+            }
+          }
+        }
+        
+        // Final fallback for stories: look for any large mp4/jpg in the HTML
+        if (results.length === 0) {
+           const mp4Matches = html.match(/https?:\/\/[^"'\s<>]+?\.mp4[^"'\s<>]*/g);
+           if (mp4Matches) {
+             mp4Matches.forEach(m => {
+               const decoded = m.replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
+               if (!results.some(r => r.mediaUrl === decoded)) {
+                 results.push({ mediaUrl: decoded, thumbnail: decoded, type: "video" });
+               }
+             });
+           }
         }
       }
 
