@@ -8,19 +8,65 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const userAgents = [
-  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Mobile/15E148 Safari/604.1",
-  "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.6312.80 Mobile Safari/537.36",
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Mobile/15E148 Safari/604.1",
   "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
   "Mozilla/5.0 (iPad; CPU OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
+  "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.6312.80 Mobile Safari/537.36",
   "Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-  "Instagram 219.0.0.12.117 Android (29/10; 480dpi; 1080x2220; samsung; SM-G973F; beyond1; exynos9820; en_GB; 340367919)",
-  "Instagram 322.0.0.33.107 (iPhone15,2; iOS 17_3_1; en_US; en-US; scale=3.00; 1179x2556; 570773663)"
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:124.0) Gecko/20100101 Firefox/124.0",
+  "Instagram 322.0.0.33.107 (iPhone15,2; iOS 17_3_1; en_US; en-US; scale=3.00; 1179x2556; 570773663)",
+  "Instagram 219.0.0.12.117 Android (29/10; 480dpi; 1080x2220; samsung; SM-G973F; beyond1; exynos9820; en_GB; 340367919)"
 ];
+
+const getHeaders = (userAgent: string, cookies: string = "", csrfToken: string = "", referer: string = "https://www.instagram.com/") => {
+  const headers: any = {
+    "User-Agent": userAgent,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "X-IG-App-ID": "936619743392459",
+    "X-ASBD-ID": "129477",
+    "X-IG-WWW-Claim": "0",
+    "X-IG-Capabilities": "3brvPw==",
+    "X-IG-Connection-Type": "WIFI",
+    "X-Requested-With": "XMLHttpRequest",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+    "Referer": referer,
+    "Cookie": cookies
+  };
+
+  if (csrfToken) {
+    headers["X-CSRFToken"] = csrfToken;
+  }
+
+  // Dynamic sec-ch-ua headers
+  if (userAgent.includes("Chrome") || userAgent.includes("Chromium")) {
+    const version = userAgent.match(/(?:Chrome|Chromium)\/([0-9]+)/)?.[1] || "123";
+    headers["sec-ch-ua"] = `\"Google Chrome\";v=\"${version}\", \"Chromium\";v=\"${version}\", \"Not:A-Brand\";v=\"8\"`;
+    headers["sec-ch-ua-mobile"] = userAgent.includes("Mobile") ? "?1" : "?0";
+    
+    if (userAgent.includes("Windows")) headers["sec-ch-ua-platform"] = '\"Windows\"';
+    else if (userAgent.includes("Macintosh")) headers["sec-ch-ua-platform"] = '\"macOS\"';
+    else if (userAgent.includes("Linux")) headers["sec-ch-ua-platform"] = '\"Linux\"';
+    else if (userAgent.includes("Android")) headers["sec-ch-ua-platform"] = '\"Android\"';
+  } else if (userAgent.includes("iPhone") || userAgent.includes("iPad")) {
+    headers["sec-ch-ua-mobile"] = "?1";
+    headers["sec-ch-ua-platform"] = '"iOS"';
+  }
+
+  return headers;
+};
 
 const app = express();
 
@@ -51,6 +97,30 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
     const isStory = url.includes("/stories/");
     const shortcodeMatch = url.match(/\/(?:p|reels|reel)\/([A-Za-z0-9_-]+)/);
     const shortcode = shortcodeMatch ? shortcodeMatch[1] : null;
+
+    let cookies = "";
+    let csrfToken = "";
+    
+    // Try to get cookies first from the main page with retries
+    for (let i = 0; i < 2; i++) {
+      try {
+        const initialRes = await axios.get("https://www.instagram.com/", {
+          headers: getHeaders(userAgents[Math.floor(Math.random() * 5)]),
+          timeout: 5000
+        });
+        const setCookie = initialRes.headers["set-cookie"];
+        if (setCookie) {
+          cookies = setCookie.map(c => c.split(";")[0]).join("; ");
+          const csrfMatch = cookies.match(/csrftoken=([^;]+)/);
+          if (csrfMatch) {
+            csrfToken = csrfMatch[1];
+            break;
+          }
+        }
+      } catch (e) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
 
     try {
       // Strategy -1: OEmbed API (Public and often works when others are blocked)
@@ -93,14 +163,9 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
             await new Promise(resolve => setTimeout(resolve, 200 + Math.random() * 300));
             
             const isMobileApi = jsonUrl.includes("i.instagram.com") || jsonUrl.includes("api/v1");
+            const ua = isMobileApi ? userAgents[userAgents.length - 2] : userAgents[0];
             const jsonResponse = await axios.get(jsonUrl, {
-              headers: {
-                "User-Agent": isMobileApi ? userAgents[userAgents.length - 2] : userAgents[0],
-                "X-IG-App-ID": "936619743392459",
-                "X-ASBD-ID": "129477",
-                "X-Requested-With": "XMLHttpRequest",
-                "Referer": url,
-              },
+              headers: getHeaders(ua, cookies, csrfToken, url),
               timeout: 6000,
             });
             
@@ -199,14 +264,7 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
               for (const endpoint of userInfoEndpoints) {
                 try {
                   const userInfoResponse = await axios.get(endpoint, {
-                    headers: {
-                      "User-Agent": ua,
-                      "X-IG-App-ID": "936619743392459",
-                      "X-ASBD-ID": "129477",
-                      "X-IG-WWW-Claim": "0",
-                      "Accept": "*/*",
-                      "Referer": `https://www.instagram.com/${username}/`,
-                    },
+                    headers: getHeaders(ua, cookies, csrfToken, `https://www.instagram.com/${username}/`),
                     timeout: 7000,
                   });
                   
@@ -266,13 +324,7 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
               try {
                 const storyApiUrl = `https://www.instagram.com/api/v1/feed/reels_media/?reel_ids=${userId}`;
                 const storyResponse = await axios.get(storyApiUrl, {
-                  headers: {
-                    "User-Agent": userAgents[Math.floor(Math.random() * userAgents.length)],
-                    "X-IG-App-ID": "936619743392459",
-                    "X-ASBD-ID": "129477",
-                    "X-Requested-With": "XMLHttpRequest",
-                    "Referer": `https://www.instagram.com/stories/${username}/`,
-                  },
+                  headers: getHeaders(ua, cookies, csrfToken, `https://www.instagram.com/stories/${username}/`),
                   timeout: 8000,
                 });
 
@@ -302,10 +354,7 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
                   console.log(`[Story] Trying Media Info API for ${targetStoryId}`);
                   const mediaInfoUrl = `https://www.instagram.com/api/v1/media/${targetStoryId}/info/`;
                   const mediaRes = await axios.get(mediaInfoUrl, {
-                    headers: {
-                      "User-Agent": userAgents[0],
-                      "X-IG-App-ID": "936619743392459",
-                    },
+                    headers: getHeaders(userAgents[0], cookies, csrfToken, url),
                     timeout: 7000
                   });
                   if (mediaRes.data?.items?.[0]) {
@@ -413,64 +462,46 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
           }
         } catch (e) {}
       }
-      const fetchInstagram = async (userAgent: string, cookies: string = "") => {
-        return await axios.get(url, {
-          headers: {
-            "User-Agent": userAgent,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "X-IG-App-ID": "936619743392459",
-            "X-ASBD-ID": "129477",
-            "X-IG-WWW-Claim": "0",
-            "X-IG-Capabilities": "3brvPw==",
-            "X-IG-Connection-Type": "WIFI",
-            "X-Requested-With": "XMLHttpRequest",
-            "Cache-Control": "no-cache",
-            "Pragma": "no-cache",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-            "Upgrade-Insecure-Requests": "1",
-            "Referer": "https://www.instagram.com/",
-            "Cookie": cookies
-          },
-          maxRedirects: 5,
-          timeout: 10000,
-          validateStatus: (status) => status < 500,
-        });
-      };
-
       let response;
       let html = "";
-      let cookies = "";
       
-      // Try to get cookies first from the main page
-      try {
-        const initialRes = await axios.get("https://www.instagram.com/", {
-          headers: { "User-Agent": userAgents[0] },
-          timeout: 5000
-        });
-        const setCookie = initialRes.headers["set-cookie"];
-        if (setCookie) {
-          cookies = setCookie.map(c => c.split(";")[0]).join("; ");
-        }
-      } catch (e) {}
+      // Try different user agents if blocked with a retry loop
+      const maxRetries = 3;
+      let success = false;
 
-      // Try different user agents if blocked
-      for (const ua of userAgents) {
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        const ua = userAgents[Math.floor(Math.random() * userAgents.length)];
+        console.log(`[Fetch] Attempt ${attempt + 1} using UA: ${ua.substring(0, 50)}...`);
+        
         try {
-          response = await fetchInstagram(ua, cookies);
+          response = await axios.get(url, {
+            headers: getHeaders(ua, cookies, csrfToken),
+            maxRedirects: 5,
+            timeout: 10000,
+            validateStatus: (status) => status < 500,
+          });
+
           const finalUrl = response.request.res.responseUrl || url;
-          
-          // Even if it redirects to login, we might get some HTML content
           html = response.data;
-          
-          if (!finalUrl.includes("accounts/login")) {
-            if (html.includes("video_url") || html.includes("video_versions") || html.includes(".mp4")) {
+
+          if (!finalUrl.includes("accounts/login") && !html.includes("login") && !html.includes("challenge")) {
+            if (html.includes("video_url") || html.includes("video_versions") || html.includes(".mp4") || html.includes("display_url")) {
+              console.log(`[Fetch] Success on attempt ${attempt + 1}`);
+              success = true;
               break;
             }
+          } else {
+            console.log(`[Fetch] Attempt ${attempt + 1} hit login/challenge page`);
           }
-        } catch (e) {}
+        } catch (e: any) {
+          console.log(`[Fetch] Attempt ${attempt + 1} error: ${e.message}`);
+        }
+
+        // Wait before retry with exponential backoff
+        if (attempt < maxRetries - 1) {
+          const delay = 1000 * (attempt + 1) + Math.random() * 1000;
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
       }
 
       // Strategy 1.5: Embed Page Scraping (Often has less protection)
@@ -479,11 +510,7 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
           console.log(`[Post] Trying Embed Page for ${shortcode}`);
           const embedUrl = `https://www.instagram.com/p/${shortcode}/embed/captioned/`;
           const embedRes = await axios.get(embedUrl, {
-            headers: {
-              "User-Agent": userAgents[Math.floor(Math.random() * userAgents.length)],
-              "X-Requested-With": "XMLHttpRequest",
-              "Referer": "https://www.instagram.com/",
-            },
+            headers: getHeaders(userAgents[Math.floor(Math.random() * userAgents.length)], cookies, csrfToken, "https://www.instagram.com/"),
             timeout: 6000
           });
           
@@ -549,11 +576,7 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
             console.log(`[Post] Trying GraphQL Fallback (${hash}) for ${shortcode}`);
             const gqlUrl = `https://www.instagram.com/graphql/query/?query_hash=${hash}&variables=${encodeURIComponent(JSON.stringify({ shortcode }))}`;
             const gqlResponse = await axios.get(gqlUrl, {
-              headers: {
-                "User-Agent": userAgents[0],
-                "X-Requested-With": "XMLHttpRequest",
-                "Referer": url,
-              },
+              headers: getHeaders(userAgents[0], cookies, csrfToken, url),
               timeout: 5000,
             });
             
@@ -949,7 +972,7 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
         url: url,
         responseType: "stream",
         headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+          "User-Agent": userAgents[Math.floor(Math.random() * userAgents.length)],
           "Referer": "https://www.instagram.com/",
         },
         timeout: 20000,
