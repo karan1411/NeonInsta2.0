@@ -53,19 +53,46 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
     const shortcode = shortcodeMatch ? shortcodeMatch[1] : null;
 
     try {
+      // Strategy -1: OEmbed API (Public and often works when others are blocked)
+      if (shortcode && !isStory) {
+        try {
+          console.log(`[Post] Trying OEmbed API for ${shortcode}`);
+          const oembedUrl = `https://www.instagram.com/api/v1/oembed/?url=${encodeURIComponent(url)}`;
+          const oembedRes = await axios.get(oembedUrl, {
+            headers: { "User-Agent": userAgents[0] },
+            timeout: 5000
+          });
+          
+          if (oembedRes.data && oembedRes.data.thumbnail_url) {
+            console.log(`[Post] Found media via OEmbed`);
+            // OEmbed usually only gives a thumbnail, but it's a start.
+            // Some OEmbed responses might have more info in newer versions.
+            // We'll continue to other strategies if we only get a thumbnail and want the video.
+          }
+        } catch (e) {}
+      }
+
       // Strategy 0: Direct JSON API (Fastest and most reliable if not blocked)
       if (shortcode && !isStory) {
         const jsonEndpoints = [
           `${url}?__a=1&__d=dis`,
+          `${url}?__a=1&__d=1`,
           `https://www.instagram.com/p/${shortcode}/?__a=1&__d=dis`,
+          `https://www.instagram.com/p/${shortcode}/?__a=1&__d=1`,
           `https://www.instagram.com/api/v1/media/info/?shortcode=${shortcode}`,
           `https://www.instagram.com/api/v1/media/shortcode_to_id/?shortcode=${shortcode}`,
-          `https://i.instagram.com/api/v1/media/${shortcode}/info/`
+          `https://i.instagram.com/api/v1/media/${shortcode}/info/`,
+          `https://www.instagram.com/api/v1/media/${shortcode}/info/`,
+          `https://www.instagram.com/reels/${shortcode}/?__a=1&__d=dis`,
+          `https://www.instagram.com/reels/${shortcode}/?__a=1&__d=1`
         ];
 
         for (const jsonUrl of jsonEndpoints) {
           try {
-            const isMobileApi = jsonUrl.includes("i.instagram.com");
+            // Add a small delay between attempts to avoid being flagged
+            await new Promise(resolve => setTimeout(resolve, 200 + Math.random() * 300));
+            
+            const isMobileApi = jsonUrl.includes("i.instagram.com") || jsonUrl.includes("api/v1");
             const jsonResponse = await axios.get(jsonUrl, {
               headers: {
                 "User-Agent": isMobileApi ? userAgents[userAgents.length - 2] : userAgents[0],
@@ -386,7 +413,7 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
           }
         } catch (e) {}
       }
-      const fetchInstagram = async (userAgent: string) => {
+      const fetchInstagram = async (userAgent: string, cookies: string = "") => {
         return await axios.get(url, {
           headers: {
             "User-Agent": userAgent,
@@ -405,6 +432,7 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
             "Sec-Fetch-Site": "none",
             "Upgrade-Insecure-Requests": "1",
             "Referer": "https://www.instagram.com/",
+            "Cookie": cookies
           },
           maxRedirects: 5,
           timeout: 10000,
@@ -414,11 +442,24 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
 
       let response;
       let html = "";
+      let cookies = "";
       
+      // Try to get cookies first from the main page
+      try {
+        const initialRes = await axios.get("https://www.instagram.com/", {
+          headers: { "User-Agent": userAgents[0] },
+          timeout: 5000
+        });
+        const setCookie = initialRes.headers["set-cookie"];
+        if (setCookie) {
+          cookies = setCookie.map(c => c.split(";")[0]).join("; ");
+        }
+      } catch (e) {}
+
       // Try different user agents if blocked
       for (const ua of userAgents) {
         try {
-          response = await fetchInstagram(ua);
+          response = await fetchInstagram(ua, cookies);
           const finalUrl = response.request.res.responseUrl || url;
           
           // Even if it redirects to login, we might get some HTML content
@@ -432,6 +473,63 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
         } catch (e) {}
       }
 
+      // Strategy 1.5: Embed Page Scraping (Often has less protection)
+      if (shortcode && !isStory) {
+        try {
+          console.log(`[Post] Trying Embed Page for ${shortcode}`);
+          const embedUrl = `https://www.instagram.com/p/${shortcode}/embed/captioned/`;
+          const embedRes = await axios.get(embedUrl, {
+            headers: {
+              "User-Agent": userAgents[Math.floor(Math.random() * userAgents.length)],
+              "X-Requested-With": "XMLHttpRequest",
+              "Referer": "https://www.instagram.com/",
+            },
+            timeout: 6000
+          });
+          
+          const embedHtml = embedRes.data;
+          if (embedHtml && (embedHtml.includes("video_url") || embedHtml.includes("display_url") || embedHtml.includes("fbcdn.net"))) {
+            const $embed = cheerio.load(embedHtml);
+            const embedResults: any[] = [];
+            
+            // Try to find JSON in embed
+            const jsonMatch = embedHtml.match(/window\.__additionalDataLoaded\s*\(\s*['"](.*?)['"]\s*,\s*(\{.*?\})\s*\)/) || 
+                             embedHtml.match(/window\._sharedData\s*=\s*(\{.*?\});/);
+            
+            if (jsonMatch) {
+              // ... existing JSON parsing logic could be reused here or we can just use regex on the embed HTML
+            }
+            
+            // Regex on embed HTML is often very effective
+            const mediaRegex = /https?(?:\\\/\\\/|:\/\/)[^"'\\s<>]+?\.(?:mp4|jpg|webp)(?:[^"'\\s<>]*)/g;
+            const matches = embedHtml.match(mediaRegex);
+            if (matches) {
+              matches.forEach((m: string) => {
+                const decoded = m.replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
+                if (decoded.includes("fbcdn.net") && !embedResults.some(r => r.mediaUrl === decoded)) {
+                  embedResults.push({
+                    mediaUrl: decoded,
+                    thumbnail: decoded,
+                    type: decoded.includes(".mp4") ? "video" : "image"
+                  });
+                }
+              });
+            }
+            
+            if (embedResults.length > 0) {
+              console.log(`[Post] Found media via Embed Page`);
+              return res.json({
+                success: true,
+                results: embedResults,
+                title: "Instagram Media (Embed)",
+                isReel: url.includes("/reel/") || url.includes("/reels/"),
+                isStory: false
+              });
+            }
+          }
+        } catch (e) {}
+      }
+
       // Strategy 2: GraphQL Fallback (if no video found yet)
       if (shortcode && (!html || !html.includes(".mp4"))) {
         const queryHashes = [
@@ -439,11 +537,15 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
           "d4d88dc917f0ecf41f11730700793b17",
           "9f8885144456a65948f33d3610c6ad42",
           "2c5d4d8b70cad329c4a6ebe3abb6edd4",
-          "55a3c4ba2973540007748315579b77d5"
+          "55a3c4ba2973540007748315579b77d5",
+          "01b3e0477c688842c676778408f6e4a5"
         ];
 
         for (const hash of queryHashes) {
           try {
+            // Add a small delay between attempts to avoid being flagged
+            await new Promise(resolve => setTimeout(resolve, 300 + Math.random() * 400));
+            
             console.log(`[Post] Trying GraphQL Fallback (${hash}) for ${shortcode}`);
             const gqlUrl = `https://www.instagram.com/graphql/query/?query_hash=${hash}&variables=${encodeURIComponent(JSON.stringify({ shortcode }))}`;
             const gqlResponse = await axios.get(gqlUrl, {
@@ -762,8 +864,59 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
         });
       }
 
+      // 7. Plan G: Last Resort Regex (Any fbcdn link with media extensions)
       if (results.length === 0) {
-        return res.status(404).json({ error: "Media not found. The post might be private or the link is invalid." });
+        console.log("[Post] Plan G: Last Resort Regex...");
+        const lastResortRegex = /https:\/\/scontent\.cdninstagram\.com\/v\/[^"'\s<>]+?\.(?:mp4|jpg|webp|png)(?:[^"'\s<>]*)/g;
+        const lastResortMatches = html.match(lastResortRegex);
+        if (lastResortMatches) {
+          lastResortMatches.forEach(m => {
+            const decoded = m.replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
+            if (!results.some(r => r.mediaUrl === decoded)) {
+              results.push({
+                mediaUrl: decoded,
+                thumbnail: decoded,
+                type: decoded.includes(".mp4") ? "video" : "image"
+              });
+            }
+          });
+        }
+      }
+
+      // 8. Plan H: Deep shortcode_media search in any script tag
+      if (results.length === 0) {
+        console.log("[Post] Plan H: Deep shortcode_media search...");
+        const shortcodeMediaRegex = /"shortcode_media":\s*(\{.*?\})/g;
+        const shortcodeMediaMatches = html.match(shortcodeMediaRegex);
+        if (shortcodeMediaMatches) {
+          shortcodeMediaMatches.forEach(match => {
+            try {
+              const media = JSON.parse("{" + match + "}").shortcode_media;
+              if (media) {
+                const isVideo = media.is_video;
+                const vUrl = media.video_url;
+                const dUrl = media.display_url;
+                if (vUrl || dUrl) {
+                  results.push({
+                    mediaUrl: isVideo && vUrl ? vUrl : dUrl,
+                    thumbnail: dUrl || vUrl,
+                    type: isVideo ? "video" : "image"
+                  });
+                }
+              }
+            } catch (e) {}
+          });
+        }
+      }
+
+      if (results.length === 0) {
+        if (html.includes("login") || html.includes("accounts/login")) {
+          return res.status(403).json({ error: "Instagram is forcing a login to view this content. This happens even for public accounts when they detect automated requests. Please try again in a few minutes." });
+        }
+        if (html.includes("challenge") || html.includes("checkpoint")) {
+          return res.status(403).json({ error: "Instagram has triggered a security challenge. This usually means our server's IP is temporarily flagged. Please try again in 5-10 minutes." });
+        }
+        return res.status(404).json({ error: "Media not found. The post might be private, deleted, or Instagram is blocking the request. If it's a public post, try again in a moment." });
       }
 
       // Deduplicate results
