@@ -8,12 +8,12 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const userAgents = [
-  "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-  "Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1"
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Mobile/15E148 Safari/604.1",
+  "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.6312.80 Mobile Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
 ];
 
 const app = express();
@@ -118,191 +118,193 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
           const username = usernameMatch ? usernameMatch[1] : null;
           
           if (username) {
-            console.log(`Attempting to fetch stories for user: ${username}`);
-            // Add a small random delay to mimic human behavior
-            await new Promise(resolve => setTimeout(resolve, 500 + Math.random() * 1000));
+            console.log(`[Story] Attempting to fetch for user: ${username}`);
+            await new Promise(resolve => setTimeout(resolve, 300 + Math.random() * 500));
             
-            const ua = userAgents[Math.floor(Math.random() * userAgents.length)];
-            // First get user info to get user ID
-            const userInfoUrl = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${username}`;
-            let userInfoResponse;
+            const ua = userAgents[0];
+            let userId = null;
+            let isPrivate = false;
+
+            // Step 1: Get User ID
             try {
-              userInfoResponse = await axios.get(userInfoUrl, {
+              const userInfoUrl = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${username}`;
+              const userInfoResponse = await axios.get(userInfoUrl, {
                 headers: {
                   "User-Agent": ua,
                   "X-IG-App-ID": "936619743392459",
                   "X-ASBD-ID": "129477",
                   "X-IG-WWW-Claim": "0",
-                  "X-Requested-With": "XMLHttpRequest",
+                  "Accept": "*/*",
                   "Referer": `https://www.instagram.com/${username}/`,
                 },
-                timeout: 8000,
+                timeout: 7000,
               });
+              
+              const user = userInfoResponse?.data?.data?.user;
+              userId = user?.id;
+              isPrivate = user?.is_private;
+              console.log(`[Story] Found User ID via API: ${userId}`);
             } catch (e: any) {
-              console.error(`Story User Info Error for ${username}:`, e.message);
-              // Try another backup endpoint for user ID
+              console.log(`[Story] API User Info failed: ${e.message}. Trying scraping...`);
               try {
-                const backupUrl = `https://www.instagram.com/${username}/?__a=1&__d=dis`;
-                const backupRes = await axios.get(backupUrl, { headers: { "User-Agent": ua, "X-IG-App-ID": "936619743392459" } });
-                userInfoResponse = { data: { data: { user: backupRes.data.graphql?.user || backupRes.data.logging_page_id?.replace("profilePage_", "") } } };
+                const profileRes = await axios.get(`https://www.instagram.com/${username}/`, {
+                  headers: { "User-Agent": userAgents[Math.floor(Math.random() * userAgents.length)] },
+                  timeout: 7000
+                });
+                const profileHtml = profileRes.data;
+                const idMatch = profileHtml.match(/"id":"(\d+)"/) || 
+                               profileHtml.match(/"user_id":"(\d+)"/) || 
+                               profileHtml.match(/"pk":"(\d+)"/) ||
+                               profileHtml.match(/"owner":\{"id":"(\d+)"\}/);
+                if (idMatch) userId = idMatch[1];
+                isPrivate = profileHtml.includes('"is_private":true');
+                console.log(`[Story] Found User ID via scraping: ${userId}`);
               } catch (err) {}
             }
-            
-            const user = userInfoResponse?.data?.data?.user;
-            let userId = typeof user === 'string' ? user : user?.id;
-            const isPrivate = user?.is_private;
 
             if (isPrivate) {
               return res.status(403).json({ error: "This account is PRIVATE. We cannot download stories from private accounts." });
             }
-            
-            // Fallback: Try to get userId from HTML if API fails
-            if (!userId) {
-              try {
-                const profileHtml = await axios.get(`https://www.instagram.com/${username}/`, {
-                  headers: { "User-Agent": userAgents[0] }
-                });
-                const idMatch = profileHtml.data.match(/"user_id":"(\d+)"/) || profileHtml.data.match(/"id":"(\d+)"/);
-                if (idMatch) userId = idMatch[1];
-              } catch (e) {}
-            }
 
             if (userId) {
-              const ua = userAgents[Math.floor(Math.random() * userAgents.length)];
-              const storyApiUrl = `https://www.instagram.com/api/v1/feed/reels_media/?reel_ids=${userId}`;
-              let storyResponse;
-              
               // Get target story ID from URL if present
               const storyIdMatch = url.match(/\/stories\/[^\/]+\/([0-9]+)/);
               const targetStoryId = storyIdMatch ? storyIdMatch[1] : null;
+              
+              const results: any[] = [];
 
+              // Strategy A: Reels Media API
               try {
-                storyResponse = await axios.get(storyApiUrl, {
+                const storyApiUrl = `https://www.instagram.com/api/v1/feed/reels_media/?reel_ids=${userId}`;
+                const storyResponse = await axios.get(storyApiUrl, {
                   headers: {
-                    "User-Agent": ua,
+                    "User-Agent": userAgents[Math.floor(Math.random() * userAgents.length)],
                     "X-IG-App-ID": "936619743392459",
                     "X-ASBD-ID": "129477",
-                    "X-IG-WWW-Claim": "0",
                     "X-Requested-With": "XMLHttpRequest",
                     "Referer": `https://www.instagram.com/stories/${username}/`,
                   },
                   timeout: 8000,
                 });
+
+                const reel = storyResponse.data?.reels?.[userId];
+                if (reel && reel.items) {
+                  reel.items.forEach((item: any) => {
+                    if (targetStoryId && !item.id.includes(targetStoryId)) return;
+                    const isVideo = !!item.video_versions;
+                    const vUrl = item.video_versions?.[0]?.url;
+                    const iUrl = item.image_versions2?.candidates?.[0]?.url;
+                    if (vUrl || iUrl) {
+                      results.push({
+                        mediaUrl: (isVideo && vUrl) ? vUrl : iUrl,
+                        thumbnail: iUrl || vUrl,
+                        type: isVideo ? "video" : "image",
+                      });
+                    }
+                  });
+                }
               } catch (e: any) {
-                console.error(`Story Reels Media Error for ${username}:`, e.message);
+                console.log(`[Story] Reels Media API failed: ${e.message}`);
               }
 
-              // Strategy B: Media Info API (Fallback)
-              if (!storyResponse?.data?.reels?.[userId] && targetStoryId) {
+              // Strategy B: Media Info API (if targetStoryId exists)
+              if (results.length === 0 && targetStoryId) {
                 try {
+                  console.log(`[Story] Trying Media Info API for ${targetStoryId}`);
                   const mediaInfoUrl = `https://www.instagram.com/api/v1/media/${targetStoryId}/info/`;
                   const mediaRes = await axios.get(mediaInfoUrl, {
                     headers: {
-                      "User-Agent": ua,
+                      "User-Agent": userAgents[0],
                       "X-IG-App-ID": "936619743392459",
-                      "X-ASBD-ID": "129477",
-                    }
+                    },
+                    timeout: 7000
                   });
-                  if (mediaRes.data?.items) {
-                    storyResponse = { data: { reels: { [userId]: { items: mediaRes.data.items } } } };
+                  if (mediaRes.data?.items?.[0]) {
+                    const item = mediaRes.data.items[0];
+                    const isVideo = !!item.video_versions;
+                    const vUrl = item.video_versions?.[0]?.url;
+                    const iUrl = item.image_versions2?.candidates?.[0]?.url;
+                    if (vUrl || iUrl) {
+                      results.push({
+                        mediaUrl: (isVideo && vUrl) ? vUrl : iUrl,
+                        thumbnail: iUrl || vUrl,
+                        type: isVideo ? "video" : "image",
+                      });
+                    }
                   }
                 } catch (e) {}
               }
-              
-              const reels = storyResponse?.data?.reels;
-              if (reels && reels[userId]) {
-                const items = reels[userId].items;
-                const results: any[] = [];
-                
-                items.forEach((item: any) => {
-                  // If we have a target ID, only take that one. Otherwise take all.
-                  if (targetStoryId && !item.id.includes(targetStoryId)) return;
-                  
-                  const isVideo = !!item.video_versions;
-                  const vUrl = item.video_versions?.[0]?.url;
-                  const iUrl = item.image_versions2?.candidates?.[0]?.url;
-                  
-                  if (vUrl || iUrl) {
-                    results.push({
-                      mediaUrl: (isVideo && vUrl) ? vUrl : iUrl,
-                      thumbnail: iUrl || vUrl,
-                      type: isVideo ? "video" : "image",
+
+              // Strategy B.5: Direct Reel URL Fallback (if targetStoryId exists)
+              if (results.length === 0 && targetStoryId) {
+                try {
+                  console.log(`[Story] Trying direct Reel URL fallback for ${targetStoryId}`);
+                  const reelUrl = `https://www.instagram.com/reels/${targetStoryId}/`;
+                  const reelRes = await axios.get(reelUrl, {
+                    headers: { "User-Agent": userAgents[0] },
+                    timeout: 5000
+                  });
+                  const reelHtml = reelRes.data;
+                  const mediaRegex = /https?(?:\\\/\\\/|:\/\/)[^"'\\s<>]+?\.(?:mp4|jpg|webp)(?:[^"'\\s<>]*)/g;
+                  const mediaMatches = reelHtml.match(mediaRegex);
+                  if (mediaMatches) {
+                    mediaMatches.forEach((m: string) => {
+                      const decoded = m.replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
+                      if (decoded.includes("fbcdn.net") && !results.some(r => r.mediaUrl === decoded)) {
+                        results.push({ 
+                          mediaUrl: decoded, 
+                          thumbnail: decoded, 
+                          type: decoded.includes(".mp4") ? "video" : "image" 
+                        });
+                      }
                     });
                   }
+                } catch (e) {}
+              }
+
+              if (results.length > 0) {
+                return res.json({
+                  success: true,
+                  results,
+                  title: `Instagram Story by ${username}`,
+                  isReel: false,
+                  isStory: true
                 });
-                
-                if (results.length > 0) {
-                  return res.json({
-                    success: true,
-                    results,
-                    title: `Instagram Story by ${username}`,
-                    isReel: false,
-                    isStory: true
-                  });
-                }
               }
             }
             
-            // Final Story Fallback: Try to scrape the story page directly
+            // Strategy C: Direct Page Scraping (Plan C)
             try {
+              console.log(`[Story] Trying direct page scraping for ${url}`);
               const storyPageRes = await axios.get(url, {
                 headers: { "User-Agent": userAgents[0] },
-                timeout: 5000
+                timeout: 7000
               });
               const storyHtml = storyPageRes.data;
               
-              // Look for sharedData in story page
-              const dataMatch = storyHtml.match(/window\._sharedData\s*=\s*(\{.*?\});/);
-              if (dataMatch) {
-                const jsonData = JSON.parse(dataMatch[1]);
-                const reel = jsonData.entry_data?.StoriesPage?.[0]?.reel;
-                if (reel && reel.items) {
-                  const results: any[] = [];
-                  reel.items.forEach((item: any) => {
-                    const isVideo = item.is_video;
-                    const vUrl = item.video_url;
-                    const dUrl = item.display_url;
-                    if (vUrl || dUrl) {
-                      results.push({
-                        mediaUrl: (isVideo && vUrl) ? vUrl : dUrl,
-                        thumbnail: dUrl || vUrl,
-                        type: isVideo ? "video" : "image"
-                      });
-                    }
-                  });
-                  if (results.length > 0) {
-                    return res.json({
-                      success: true,
-                      results,
-                      title: `Instagram Story by ${username}`,
-                      isReel: false,
-                      isStory: true
+              // Look for any direct media links in the HTML
+              const mediaRegex = /https?(?:\\\/\\\/|:\/\/)[^"'\\s<>]+?\.(?:mp4|jpg|webp)(?:[^"'\\s<>]*)/g;
+              const mediaMatches = storyHtml.match(mediaRegex);
+              
+              if (mediaMatches) {
+                const scrapedResults: any[] = [];
+                mediaMatches.forEach((m: string) => {
+                  const decoded = m.replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
+                  if (decoded.includes("fbcdn.net") && !scrapedResults.some(r => r.mediaUrl === decoded)) {
+                    scrapedResults.push({ 
+                      mediaUrl: decoded, 
+                      thumbnail: decoded, 
+                      type: decoded.includes(".mp4") ? "video" : "image" 
                     });
                   }
-                }
-              }
-
-              // Look for xdt_api__v1__media in story page
-              const directPathMatches = storyHtml.match(/"xdt_api__v1__media__direct_path":"([^"]+)"/g);
-              if (directPathMatches) {
-                const results: any[] = [];
-                directPathMatches.forEach(m => {
-                  const path = m.match(/"xdt_api__v1__media__direct_path":"([^"]+)"/)?.[1];
-                  if (path) {
-                    const decoded = path.replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
-                    if (!results.some(r => r.mediaUrl === decoded)) {
-                      results.push({
-                        mediaUrl: decoded,
-                        thumbnail: decoded,
-                        type: decoded.includes(".mp4") ? "video" : "image"
-                      });
-                    }
-                  }
                 });
-                if (results.length > 0) {
+                
+                if (scrapedResults.length > 0) {
+                  // If we have a target ID, we might have multiple stories in the HTML.
+                  // Usually the first one or the one with the most similar ID is the target.
                   return res.json({
                     success: true,
-                    results,
+                    results: scrapedResults,
                     title: `Instagram Story by ${username}`,
                     isReel: false,
                     isStory: true
@@ -362,6 +364,7 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
       // Strategy 2: GraphQL Fallback (if no video found yet)
       if (shortcode && (!html || !html.includes(".mp4"))) {
         try {
+          console.log(`[Post] Trying GraphQL Fallback for ${shortcode}`);
           const gqlUrl = `https://www.instagram.com/graphql/query/?query_hash=b7d3d6544695990391a4f148fdd9c063&variables=${encodeURIComponent(JSON.stringify({ shortcode }))}`;
           const gqlResponse = await axios.get(gqlUrl, {
             headers: {
@@ -374,6 +377,7 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
           
           const media = gqlResponse.data?.data?.shortcode_media;
           if (media) {
+            console.log(`[Post] Found media via GraphQL`);
             const results: any[] = [];
             const title = media.edge_media_to_caption?.edges?.[0]?.node?.text || "Instagram Media";
 
@@ -405,13 +409,17 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
               });
             }
           }
-        } catch (e) {}
+        } catch (e) {
+          console.log(`[Post] GraphQL Fallback failed`);
+        }
       }
 
       if (!html) {
+        console.log(`[Post] No HTML fetched after all attempts`);
         return res.status(403).json({ error: "Instagram is currently blocking our server. This happens because they protect their content aggressively. Please try again in 2-3 minutes." });
       }
 
+      console.log(`[Post] Parsing HTML for ${url}`);
       const $ = cheerio.load(html);
       const results: any[] = [];
       let title = $('meta[property="og:title"]').attr("content") || "Instagram Media";
@@ -584,6 +592,7 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
 
       // 3. If still empty, use OG tags
       if (results.length === 0) {
+        console.log(`[Post] Using OG Tags fallback`);
         if (ogVideo) {
           results.push({
             mediaUrl: ogVideo,
@@ -599,46 +608,21 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
         }
       }
 
-      // 4. Story specific extraction (Plan C: Aggressive Extraction)
-      if (isStory && results.length === 0) {
-        console.log("Plan C: Aggressive Extraction for stories...");
+      // 4. Aggressive Extraction (Plan D)
+      if (results.length === 0) {
+        console.log("[Post] Plan D: Aggressive Extraction...");
+        const mediaRegex = /https?(?:\\\/\\\/|:\/\/)[^"'\\s<>]+?\.(?:mp4|jpg|webp)(?:[^"'\\s<>]*)/g;
+        const mediaMatches = html.match(mediaRegex);
         
-        // 4a. Look for xdt_api__v1__media__direct_path
-        const directPathMatches = html.match(/"xdt_api__v1__media__direct_path":"([^"]+)"/g);
-        if (directPathMatches) {
-          directPathMatches.forEach(m => {
-            const path = m.match(/"xdt_api__v1__media__direct_path":"([^"]+)"/)?.[1];
-            if (path) {
-              const decoded = path.replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
-              if (!results.some(r => r.mediaUrl === decoded)) {
-                results.push({
-                  mediaUrl: decoded,
-                  thumbnail: decoded,
-                  type: decoded.includes(".mp4") ? "video" : "image"
-                });
-              }
-            }
-          });
-        }
-
-        // 4b. Look for any large mp4/jpg in the HTML that looks like Instagram media
-        const mp4Matches = html.match(/https?:\/\/[^"'\\s<>]+?\.mp4[^"'\\s<>]*/g);
-        const jpgMatches = html.match(/https?:\/\/[^"'\\s<>]+?\.jpg[^"'\\s<>]*/g);
-        
-        if (mp4Matches) {
-          mp4Matches.forEach(m => {
+        if (mediaMatches) {
+          mediaMatches.forEach(m => {
             const decoded = m.replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
             if (decoded.includes("fbcdn.net") && !results.some(r => r.mediaUrl === decoded)) {
-              results.push({ mediaUrl: decoded, thumbnail: decoded, type: "video" });
-            }
-          });
-        }
-        
-        if (jpgMatches && results.length === 0) {
-          jpgMatches.forEach(m => {
-            const decoded = m.replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
-            if (decoded.includes("fbcdn.net") && !results.some(r => r.mediaUrl === decoded)) {
-              results.push({ mediaUrl: decoded, thumbnail: decoded, type: "image" });
+              results.push({ 
+                mediaUrl: decoded, 
+                thumbnail: decoded, 
+                type: decoded.includes(".mp4") ? "video" : "image" 
+              });
             }
           });
         }
