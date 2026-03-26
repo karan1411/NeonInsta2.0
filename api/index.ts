@@ -118,6 +118,7 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
           const username = usernameMatch ? usernameMatch[1] : null;
           
           if (username) {
+            console.log(`Attempting to fetch stories for user: ${username}`);
             // Add a small random delay to mimic human behavior
             await new Promise(resolve => setTimeout(resolve, 500 + Math.random() * 1000));
             
@@ -214,6 +215,7 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
                 const results: any[] = [];
                 
                 items.forEach((item: any) => {
+                  // If we have a target ID, only take that one. Otherwise take all.
                   if (targetStoryId && !item.id.includes(targetStoryId)) return;
                   
                   const isVideo = !!item.video_versions;
@@ -240,6 +242,74 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
                 }
               }
             }
+            
+            // Final Story Fallback: Try to scrape the story page directly
+            try {
+              const storyPageRes = await axios.get(url, {
+                headers: { "User-Agent": userAgents[0] },
+                timeout: 5000
+              });
+              const storyHtml = storyPageRes.data;
+              
+              // Look for sharedData in story page
+              const dataMatch = storyHtml.match(/window\._sharedData\s*=\s*(\{.*?\});/);
+              if (dataMatch) {
+                const jsonData = JSON.parse(dataMatch[1]);
+                const reel = jsonData.entry_data?.StoriesPage?.[0]?.reel;
+                if (reel && reel.items) {
+                  const results: any[] = [];
+                  reel.items.forEach((item: any) => {
+                    const isVideo = item.is_video;
+                    const vUrl = item.video_url;
+                    const dUrl = item.display_url;
+                    if (vUrl || dUrl) {
+                      results.push({
+                        mediaUrl: (isVideo && vUrl) ? vUrl : dUrl,
+                        thumbnail: dUrl || vUrl,
+                        type: isVideo ? "video" : "image"
+                      });
+                    }
+                  });
+                  if (results.length > 0) {
+                    return res.json({
+                      success: true,
+                      results,
+                      title: `Instagram Story by ${username}`,
+                      isReel: false,
+                      isStory: true
+                    });
+                  }
+                }
+              }
+
+              // Look for xdt_api__v1__media in story page
+              const directPathMatches = storyHtml.match(/"xdt_api__v1__media__direct_path":"([^"]+)"/g);
+              if (directPathMatches) {
+                const results: any[] = [];
+                directPathMatches.forEach(m => {
+                  const path = m.match(/"xdt_api__v1__media__direct_path":"([^"]+)"/)?.[1];
+                  if (path) {
+                    const decoded = path.replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
+                    if (!results.some(r => r.mediaUrl === decoded)) {
+                      results.push({
+                        mediaUrl: decoded,
+                        thumbnail: decoded,
+                        type: decoded.includes(".mp4") ? "video" : "image"
+                      });
+                    }
+                  }
+                });
+                if (results.length > 0) {
+                  return res.json({
+                    success: true,
+                    results,
+                    title: `Instagram Story by ${username}`,
+                    isReel: false,
+                    isStory: true
+                  });
+                }
+              }
+            } catch (e) {}
           }
         } catch (e) {}
       }
@@ -529,49 +599,48 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
         }
       }
 
-      // 4. Story specific extraction (often found in xdt_api__v1__media__direct_path or similar)
+      // 4. Story specific extraction (Plan C: Aggressive Extraction)
       if (isStory && results.length === 0) {
-                // Story patterns for direct HTML scraping
-                const storyPatterns = [
-                  /"video_versions":\s*\[\s*\{\s*"url":"([^"]+)"/,
-                  /"image_versions2":\s*\{\s*"candidates":\s*\[\s*\{\s*"url":"([^"]+)"/,
-                  /"video_url":"([^"]+)"/,
-                  /"display_url":"([^"]+)"/,
-                  /https:\/\/instagram\.[a-z0-9]+\.fbcdn\.net\/v\/[^"'\s<>]+?\.mp4[^"'\s<>]*/g,
-                  /https:\/\/instagram\.[a-z0-9]+\.fbcdn\.net\/v\/[^"'\s<>]+?\.jpg[^"'\s<>]*/g
-                ];
-
-        for (const pattern of storyPatterns) {
-          const matches = html.match(new RegExp(pattern, 'g'));
-          if (matches) {
-            matches.forEach(m => {
-              const urlMatch = m.match(pattern);
-              if (urlMatch) {
-                const url = urlMatch[1];
-                const decoded = url.replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
-                if (!results.some(r => r.mediaUrl === decoded)) {
-                  results.push({
-                    mediaUrl: decoded,
-                    thumbnail: decoded,
-                    type: decoded.includes(".mp4") || decoded.includes("video") || decoded.includes("fbcdn") ? "video" : "image"
-                  });
-                }
+        console.log("Plan C: Aggressive Extraction for stories...");
+        
+        // 4a. Look for xdt_api__v1__media__direct_path
+        const directPathMatches = html.match(/"xdt_api__v1__media__direct_path":"([^"]+)"/g);
+        if (directPathMatches) {
+          directPathMatches.forEach(m => {
+            const path = m.match(/"xdt_api__v1__media__direct_path":"([^"]+)"/)?.[1];
+            if (path) {
+              const decoded = path.replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
+              if (!results.some(r => r.mediaUrl === decoded)) {
+                results.push({
+                  mediaUrl: decoded,
+                  thumbnail: decoded,
+                  type: decoded.includes(".mp4") ? "video" : "image"
+                });
               }
-            });
-          }
+            }
+          });
+        }
+
+        // 4b. Look for any large mp4/jpg in the HTML that looks like Instagram media
+        const mp4Matches = html.match(/https?:\/\/[^"'\\s<>]+?\.mp4[^"'\\s<>]*/g);
+        const jpgMatches = html.match(/https?:\/\/[^"'\\s<>]+?\.jpg[^"'\\s<>]*/g);
+        
+        if (mp4Matches) {
+          mp4Matches.forEach(m => {
+            const decoded = m.replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
+            if (decoded.includes("fbcdn.net") && !results.some(r => r.mediaUrl === decoded)) {
+              results.push({ mediaUrl: decoded, thumbnail: decoded, type: "video" });
+            }
+          });
         }
         
-        // Final fallback for stories: look for any large mp4/jpg in the HTML
-        if (results.length === 0) {
-           const mp4Matches = html.match(/https?:\/\/[^"'\s<>]+?\.mp4[^"'\s<>]*/g);
-           if (mp4Matches) {
-             mp4Matches.forEach(m => {
-               const decoded = m.replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
-               if (!results.some(r => r.mediaUrl === decoded)) {
-                 results.push({ mediaUrl: decoded, thumbnail: decoded, type: "video" });
-               }
-             });
-           }
+        if (jpgMatches && results.length === 0) {
+          jpgMatches.forEach(m => {
+            const decoded = m.replace(/\\u0026/g, "&").replace(/\\/g, "").replace(/\\\//g, "/");
+            if (decoded.includes("fbcdn.net") && !results.some(r => r.mediaUrl === decoded)) {
+              results.push({ mediaUrl: decoded, thumbnail: decoded, type: "image" });
+            }
+          });
         }
       }
 
