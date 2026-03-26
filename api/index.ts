@@ -7,6 +7,15 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const userAgents = [
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+  "Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1"
+];
+
 const app = express();
 
 app.use(express.json());
@@ -126,14 +135,20 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
                   "X-Requested-With": "XMLHttpRequest",
                   "Referer": `https://www.instagram.com/${username}/`,
                 },
-                timeout: 5000,
+                timeout: 8000,
               });
             } catch (e: any) {
               console.error(`Story User Info Error for ${username}:`, e.message);
+              // Try another backup endpoint for user ID
+              try {
+                const backupUrl = `https://www.instagram.com/${username}/?__a=1&__d=dis`;
+                const backupRes = await axios.get(backupUrl, { headers: { "User-Agent": ua, "X-IG-App-ID": "936619743392459" } });
+                userInfoResponse = { data: { data: { user: backupRes.data.graphql?.user || backupRes.data.logging_page_id?.replace("profilePage_", "") } } };
+              } catch (err) {}
             }
             
             const user = userInfoResponse?.data?.data?.user;
-            const userId = user?.id;
+            let userId = typeof user === 'string' ? user : user?.id;
             const isPrivate = user?.is_private;
 
             if (isPrivate) {
@@ -155,6 +170,11 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
               const ua = userAgents[Math.floor(Math.random() * userAgents.length)];
               const storyApiUrl = `https://www.instagram.com/api/v1/feed/reels_media/?reel_ids=${userId}`;
               let storyResponse;
+              
+              // Get target story ID from URL if present
+              const storyIdMatch = url.match(/\/stories\/[^\/]+\/([0-9]+)/);
+              const targetStoryId = storyIdMatch ? storyIdMatch[1] : null;
+
               try {
                 storyResponse = await axios.get(storyApiUrl, {
                   headers: {
@@ -165,20 +185,33 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
                     "X-Requested-With": "XMLHttpRequest",
                     "Referer": `https://www.instagram.com/stories/${username}/`,
                   },
-                  timeout: 5000,
+                  timeout: 8000,
                 });
               } catch (e: any) {
                 console.error(`Story Reels Media Error for ${username}:`, e.message);
+              }
+
+              // Strategy B: Media Info API (Fallback)
+              if (!storyResponse?.data?.reels?.[userId] && targetStoryId) {
+                try {
+                  const mediaInfoUrl = `https://www.instagram.com/api/v1/media/${targetStoryId}/info/`;
+                  const mediaRes = await axios.get(mediaInfoUrl, {
+                    headers: {
+                      "User-Agent": ua,
+                      "X-IG-App-ID": "936619743392459",
+                      "X-ASBD-ID": "129477",
+                    }
+                  });
+                  if (mediaRes.data?.items) {
+                    storyResponse = { data: { reels: { [userId]: { items: mediaRes.data.items } } } };
+                  }
+                } catch (e) {}
               }
               
               const reels = storyResponse?.data?.reels;
               if (reels && reels[userId]) {
                 const items = reels[userId].items;
                 const results: any[] = [];
-                
-                // If the URL has a specific story ID, find that one
-                const storyIdMatch = url.match(/\/stories\/[^\/]+\/([0-9]+)/);
-                const targetStoryId = storyIdMatch ? storyIdMatch[1] : null;
                 
                 items.forEach((item: any) => {
                   if (targetStoryId && !item.id.includes(targetStoryId)) return;
@@ -236,15 +269,6 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
         });
       };
 
-      const userAgents = [
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-        "Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1"
-      ];
-
       let response;
       let html = "";
       
@@ -253,8 +277,11 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
         try {
           response = await fetchInstagram(ua);
           const finalUrl = response.request.res.responseUrl || url;
+          
+          // Even if it redirects to login, we might get some HTML content
+          html = response.data;
+          
           if (!finalUrl.includes("accounts/login")) {
-            html = response.data;
             if (html.includes("video_url") || html.includes("video_versions") || html.includes(".mp4")) {
               break;
             }
@@ -504,14 +531,15 @@ app.post(["/api/fetch-insta", "/fetch-insta"], async (req, res) => {
 
       // 4. Story specific extraction (often found in xdt_api__v1__media__direct_path or similar)
       if (isStory && results.length === 0) {
-        // Try to find any direct video/image links in the whole HTML for stories
-        const storyPatterns = [
-          /"xdt_api__v1__media__direct_path":"([^"]+)"/,
-          /"video_versions":\s*\[\s*\{\s*"url":"([^"]+)"/,
-          /"image_versions2":\s*\{\s*"candidates":\s*\[\s*\{\s*"url":"([^"]+)"/,
-          /"video_url":"([^"]+)"/,
-          /"display_url":"([^"]+)"/
-        ];
+                // Story patterns for direct HTML scraping
+                const storyPatterns = [
+                  /"video_versions":\s*\[\s*\{\s*"url":"([^"]+)"/,
+                  /"image_versions2":\s*\{\s*"candidates":\s*\[\s*\{\s*"url":"([^"]+)"/,
+                  /"video_url":"([^"]+)"/,
+                  /"display_url":"([^"]+)"/,
+                  /https:\/\/instagram\.[a-z0-9]+\.fbcdn\.net\/v\/[^"'\s<>]+?\.mp4[^"'\s<>]*/g,
+                  /https:\/\/instagram\.[a-z0-9]+\.fbcdn\.net\/v\/[^"'\s<>]+?\.jpg[^"'\s<>]*/g
+                ];
 
         for (const pattern of storyPatterns) {
           const matches = html.match(new RegExp(pattern, 'g'));
